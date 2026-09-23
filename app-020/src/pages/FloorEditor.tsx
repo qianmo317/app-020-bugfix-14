@@ -24,7 +24,10 @@ type Props = { floorId: string };
 export function FloorEditor({ floorId }: Props) {
   const floor = useStore((s) => s.floors[floorId]);
   const building = useStore((s) => s.buildings.find((b) => b.id === floor?.buildingId));
-  const rules = useStore((s) => (floor ? s.rules['office'] : undefined));
+  // 校验按本栋建筑所属类别的规则集执行（不能写死 office：否则厂房/商业楼层也在按办公限值判）
+  const rules = useStore((s) => (floor ? s.rules[s.buildings.find((b) => b.id === floor.buildingId)?.kind ?? 'office'] : undefined));
+  // 同时盯住类别本身：建筑改类别或该类别规则改版后都要重新校验
+  const buildingKind = building?.kind ?? 'office';
   const rulesVersion = rules?.version ?? 0;
 
   const [tool, setTool] = useState<Tool>('select');
@@ -95,7 +98,7 @@ export function FloorEditor({ floorId }: Props) {
     }, 500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [floorId, floor?.version, rulesVersion]);
+  }, [floorId, floor?.version, buildingKind, rulesVersion]);
 
   if (!floor || !rules) {
     return <div className="page">楼层不存在。<Link to="/">返回首页</Link></div>;

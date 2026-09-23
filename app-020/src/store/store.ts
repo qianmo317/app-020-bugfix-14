@@ -33,10 +33,23 @@ function loadState(): AppState {
       const s = JSON.parse(raw) as Partial<AppState>;
       // 缺失的节用默认值补齐（如旧版本数据没有 rules/marks），而不是整体丢弃用户数据
       if (s && Array.isArray(s.buildings) && s.floors) {
+        // 规则按类别逐套深合并：旧存档的规则集可能没有后加字段（如 clauses / 新限值），
+        // 不能整体覆盖默认值，否则引擎读到 undefined；用户改过的字段仍保留其值与版本号
+        const mergedRules = structuredClone(DEFAULT_RULES);
+        for (const k of Object.keys(mergedRules) as BuildingKind[]) {
+          const saved = s.rules?.[k];
+          if (saved) {
+            mergedRules[k] = {
+              ...mergedRules[k],
+              ...saved,
+              clauses: { ...mergedRules[k].clauses, ...(saved.clauses ?? {}) },
+            };
+          }
+        }
         return {
           buildings: s.buildings,
           floors: s.floors,
-          rules: { ...structuredClone(DEFAULT_RULES), ...(s.rules ?? {}) },
+          rules: mergedRules,
           marks: s.marks ?? {},
         };
       }

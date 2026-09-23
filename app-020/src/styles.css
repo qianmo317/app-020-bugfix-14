@@ -128,6 +128,8 @@ input, select {
   border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12px; background: #fff;
 }
 .item b { font-weight: 600; }
+.item-basis { display: block; margin-top: 2px; }
+.stale-warn { color: #b35a00; }
 .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; }
 .dot.error { background: var(--red); }
 .dot.warning { background: var(--amber); }
@@ -149,6 +151,8 @@ input, select {
 /* 规则页 */
 .ruletabs { display: flex; gap: 6px; margin: 12px 0; }
 .ruleform { max-width: 560px; }
+.ruleform .row { flex-wrap: wrap; }
+.ruleform .clause { flex-basis: 100%; margin: 0 0 4px; }
 
 /* ---------- 打印页 ---------- */
 .printpage { background: #e9ebee; min-height: 100%; }

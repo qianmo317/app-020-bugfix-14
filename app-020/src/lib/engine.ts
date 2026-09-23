@@ -17,7 +17,7 @@ import {
   bboxOf,
 } from './geometry';
 import { buildCorridorGraph, type DoorInput } from './graph';
-import { CHECK_INTERVAL_DAYS, OCCUPANCY_DENSITY_M2_PER_PERSON } from '../rules/defaults';
+import { CHECK_INTERVAL_DAYS, FIXED_BASIS, OCCUPANCY_DENSITY_M2_PER_PERSON } from '../rules/defaults';
 
 const TRAVEL_STEP_MM = 250; // 走道栅格 0.25m，保证与手工沿路径测量误差 < 0.5m
 const ROOM_STEP_MM = 500; // 房间内部采样 0.5m
@@ -209,6 +209,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
         items.push({
           severity: 'error',
           type: 'EXIT_NOT_CONNECTED',
+          basis: FIXED_BASIS.EXIT_NOT_CONNECTED,
           facilityId: f.id,
           point: { x: f.x, y: f.y },
           message: `安全出口 ${f.code} 未连接到${openPlan ? '房间区域' : '走道'}（周边 2.5m 内无可行走行区域）`,
@@ -235,6 +236,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
         items.push({
           severity: 'error',
           type: 'DEADEND_EXCEED',
+          basis: rules.clauses.deadEnd,
           value: deadEndM,
           limit: rules.deadEndDistanceM,
           message: `袋形走道（死端）最大长度 ${deadEndM.toFixed(1)}m 超过限值 ${rules.deadEndDistanceM}m`,
@@ -251,6 +253,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
         items.push({
           severity: 'warning',
           type: 'NO_DOOR',
+          basis: FIXED_BASIS.NO_DOOR,
           roomId: r.id,
           message: `房间「${r.name}」未找到通向${openPlan ? '其他区域' : '走道'}的门（房间需与走道共边）`,
         });
@@ -266,6 +269,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
         items.push({
           severity: 'error',
           type: 'TRAVEL_EXCEED',
+          basis: rules.clauses.travel,
           roomId: r.id,
           point: res.point,
           value: res.worstM,
@@ -292,6 +296,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
           items.push({
             severity: 'error',
             type: 'TRAVEL_EXCEED',
+            basis: rules.clauses.travel,
             roomId: r.id,
             point: wp,
             value: worst / MM_PER_M,
@@ -302,7 +307,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
       }
     }
   } else if (walkPolys.length && !exitPts.length) {
-    items.push({ severity: 'error', type: 'EXIT_COUNT', message: '未布置任何安全出口' });
+    items.push({ severity: 'error', type: 'EXIT_COUNT', basis: FIXED_BASIS.EXIT_COUNT_NO_EXIT, message: '未布置任何安全出口' });
   }
 
   // 灭火器覆盖
@@ -314,6 +319,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
     items.push({
       severity: 'warning',
       type: 'COVERAGE_UNCOVERED',
+      basis: rules.clauses.coverage,
       value: coverage.uncoveredM2,
       point: coverage.samples[0],
       message: `灭火器保护半径（${rules.extinguisherRadiusM}m）未覆盖面积 ${coverage.uncoveredM2.toFixed(1)}㎡，超过阈值 max(2㎡, 5%)`,
@@ -328,6 +334,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
     items.push({
       severity: 'error',
       type: 'EXIT_COUNT',
+      basis: rules.clauses.exits,
       value: exits.length,
       limit: required,
       message: `安全出口 ${exits.length} 个，少于要求数量（面积 ${areaM2.toFixed(0)}㎡ / 人数约 ${occupants} → 需 ≥ ${required} 个）`,
@@ -341,6 +348,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
       items.push({
         severity: 'error',
         type: 'FACILITY_DEFECT',
+        basis: FIXED_BASIS.FACILITY_CHECK,
         facilityId: f.id,
         point: { x: f.x, y: f.y },
         message: `${f.code} 最近检查状态为「${f.checks.find((c) => c.date === [...f.checks].sort((a, b) => b.date.localeCompare(a.date))[0].date)?.status ?? 'missing'}」，需整改`,
@@ -349,6 +357,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
       items.push({
         severity: 'warning',
         type: 'CHECK_MISSING',
+        basis: FIXED_BASIS.FACILITY_CHECK,
         facilityId: f.id,
         point: { x: f.x, y: f.y },
         message: `${f.code} 未登记任何检查记录`,
@@ -357,6 +366,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
       items.push({
         severity: 'warning',
         type: 'CHECK_OVERDUE',
+        basis: FIXED_BASIS.FACILITY_CHECK,
         facilityId: f.id,
         point: { x: f.x, y: f.y },
         message: `${f.code} 检查已过期（应检日期 ${info.dueDate}）`,
@@ -390,9 +400,12 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
       buildingKind: rules.buildingKind,
       version: rules.version,
       source: rules.source,
-      maxTravelDistanceM: 0,
-      deadEndDistanceM: 0,
-      extinguisherRadiusM: 0,
+      clauses: structuredClone(rules.clauses),
+      maxTravelDistanceM: rules.maxTravelDistanceM,
+      deadEndDistanceM: rules.deadEndDistanceM,
+      extinguisherRadiusM: rules.extinguisherRadiusM,
+      exitMinAreaM2: rules.exitMinAreaM2,
+      exitMaxOccupants: rules.exitMaxOccupants,
     },
   };
 }

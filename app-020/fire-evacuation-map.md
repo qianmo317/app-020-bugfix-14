@@ -23,7 +23,7 @@
 2. **平面绘制**（毫米坐标，吸附 0.1m）：多边形画房间（办公/商业/仓库/病房/走道/其他六种用途）与走道，可拖动整体平移；六类设施点位（灭火器/消火栓/疏散指示灯/应急照明/安全出口/喷淋）点击放置，编号自动生成（`3F-EX-01`，查重取最大序号 +1）。
 3. **门由几何推断，不需要画门**：房间边与走道相邻的连续段 ≥0.4m 即取其中点作为门。
 4. **自动校验**（编辑后 500ms 防抖重算，不需要点按钮）：疏散最远距离、袋形走道死端、灭火器未覆盖面积、安全出口数量与连通性、房间无门、检查记录过期/缺失/损坏。
-5. **规则可配**：`#/rules` 按建筑类别改限值（疏散距离、袋形走道、灭火器半径、需两个出口的最小面积与人数、依据文号），改一次版本号 +1，此后校验结果记录当时快照。
+5. **规则可配**：`#/rules` 按建筑类别改限值（疏散距离、袋形走道、灭火器半径、需两个出口的最小面积与人数、依据文号），各类别规则相互独立；改一次版本号 +1，编辑器立即按新版重新校验，每一条校验项与结果快照都记录当时的版本、文号与所照具体条文。
 6. **出图与台账**：A4/A3 横纵四种规格的白底图纸（图例、比例尺、指北针、「您在此」标记），打印 / 另存 PDF、导出 PNG、导出 CSV；整改清单列全部不合规项。
 7. **底图与照片**：导入平面图片（长边压缩到 1600、JPEG 0.85）存 IndexedDB，可调不透明度与 mm/px 比例；检查记录可附现场照片。
 8. **本地持久化**：结构数据存 localStorage（键 `fem.v1`），底图与照片存 IndexedDB（库 `fem-blobs`）；内置「载入示例」一键生成示例楼层。
@@ -64,14 +64,17 @@ type Floor = { id: string; buildingId: string; level: number; scaleMmPerUnit: nu
                underlay?: Underlay; version: number; lastValidation?: ValidationResult };
 type RuleSet = { buildingKind: BuildingKind; maxTravelDistanceM: number; deadEndDistanceM: number;
                  extinguisherRadiusM: number; exitMinAreaM2: number; exitMaxOccupants: number;
-                 source: string; version: number };
+                 source: string; clauses: { travel; deadEnd; coverage; exits }; version: number };
+type ValidationItem = { severity; type; message; basis: string; roomId?; facilityId?; point?;
+                        value?; limit? };                                    // basis = 本条所照的具体条文（含文号）
 type ValidationResult = { checkedAt: string; pass: boolean; items: ValidationItem[];
                           travelWorstM: number | null; travelWorstPoint?: Pt | null;
                           deadEndM: number | null; coverage: { uncoveredM2: number; totalM2: number;
                           pass: boolean; samples: Pt[] } | null;
                           exits: { present: number; required: number };
-                          rulesSnapshot: { buildingKind; version; source; maxTravelDistanceM;
-                                           deadEndDistanceM; extinguisherRadiusM } };
+                          rulesSnapshot: { buildingKind; version; source; clauses;
+                                           maxTravelDistanceM; deadEndDistanceM; extinguisherRadiusM;
+                                           exitMinAreaM2; exitMaxOccupants } };
 ```
 全局状态为 `{ buildings, floors, rules, marks }`，`marks` 存各楼层的「您在此」坐标；默认规则集在 `src/rules/defaults.ts`（四类建筑各一套，均带依据文号，版本从 1 起）。
 
@@ -83,7 +86,7 @@ type ValidationResult = { checkedAt: string; pass: boolean; items: ValidationIte
 5. **灭火器覆盖**（`engine.ts` 的 `computeCoverage`）：0.5m 格心采样，格心落在任一灭火器保护圆内即整格算已覆盖，未覆盖面积 = 未覆盖格数 × 0.25㎡；`uncoveredM2 <= max(2, 楼层面积 × 5%)` 才合格。用边长 `max(radius, 5m)` 的桶哈希，仅检查 3×3 邻桶内的点位。
 6. **安全出口数量**：`required = (楼层总面积 > exitMinAreaM2 或 估算人数 > exitMaxOccupants) ? 2 : 1`；人数未填时按用途密度估算（办公 10、商业 3、仓库 50、病房 8、走道 0、其他 20 ㎡/人）。
 7. **检查到期**（`checkDueInfo`）：按日期取最近一次记录，应检日期 = 最近检查 + 周期（灭火器 30 天、消火栓 30 天、疏散指示灯 90 天、应急照明 90 天、安全出口 180 天、喷淋 180 天）；`damaged`/`missing` 记 `defect`（error），无记录 `CHECK_MISSING`（warning），超周期 `CHECK_OVERDUE`（warning）；日期按本地时区拼接，避免 `toISOString` 跨时区提前一天。
-8. **结论与排序**：`pass = 无 error 项 且 灭火器覆盖合格`；列表 error 置前，同类按 `value / limit` 降序。
+8. **结论与排序**：`pass = 无 error 项 且 灭火器覆盖合格`；列表 error 置前，同类按 `value / limit` 降序。每条 `ValidationItem` 带 `basis`（限值类取当前规则集的 `clauses`，检查台账类取固定的公安部令第61号第二十五条），结果中的 `rulesSnapshot` 深拷贝当时的完整规则集（含 `clauses` 与全部限值），事后改规则不影响已存结果。
 9. **渲染**：全部走 SVG，1 用户单位 = 1mm，缩放是 viewBox 变换（不重算几何）；图纸含 1m/5m 网格、房间多边形与面积标注、设施符号、未覆盖栅格高亮、校验定位红圈。
 10. **状态管理**（`src/store/store.ts`）：手写外部 store + `useSyncExternalStore`；每次 `setState` 浅拷贝各顶层容器并替换被改动的对象引用，保证选择器能感知更新（`tests/store.test.ts` S1 就是这条的回归）。
 
@@ -95,11 +98,11 @@ type ValidationResult = { checkedAt: string; pass: boolean; items: ValidationIte
 - 破坏性操作（删建筑、删楼层）都有 `confirm` 二次确认；顶栏常驻「数据仅存于本机浏览器 · 断网可用」。
 
 ## 10. 验收标准
-- 单元测试 **7 个文件 / 59 个用例**全部通过（vitest 2.1.9，`npm test`）：疏散距离 20 组、灭火器覆盖 10 组、检查台账 7 组、编号 6 组、store 回归 10 组、规则切换 4 组、性能 2 组。
+- 单元测试 **8 个文件 / 69 个用例**全部通过（vitest 2.1.9，`npm test`）：疏散距离 20 组、灭火器覆盖 10 组、检查台账 7 组、编号 6 组、store 回归 10 组、规则切换 4 组、规则版本/类别/条文溯源 10 组、性能 2 组。
 - 疏散距离：20 组沿路径用例与手工沿路径测量的误差 < 0.5m；其中第 04 组必须证明「直线距离 ≤40m 看着合格、沿路径 >50m 实际超标」被判 `TRAVEL_EXCEED` 且 `pass=false`。
 - 灭火器覆盖：10 组未覆盖面积与人工核算（圆面积差集、条带面积）误差 ≤10%，且格心采样总面积与房间面积一致（20×20 房间 = 400㎡）。
 - 台账：过期项 **100%** 出现在校验结果中（L6 按 `facilityId` 对账，无遗漏也无多余）；`damaged`/`missing` 为 error 级且排在最前。
-- 规则：同一张图纸在办公 / 厂房 / 商业规则下结论翻转；改规则后版本 +1，`rulesSnapshot` 记下版本与依据文号。
+- 规则：同一张图纸在办公 / 厂房 / 商业规则下结论翻转；改规则后版本 +1，`rulesSnapshot` 记下完整限值、版本与文号，`ValidationItem.basis` 逐条记下所照的具体条文；旧结果不被新版规则牵连，改规则后重新校验按新版判定（`tests/rule-version.test.ts` 10 组回归，含旧存档字段回填迁移）。
 - 性能：210 房间 + 500 设施单次 `validateFloor` < 500ms（本机实测冷启动 218ms、热路径 62ms）。
 - 容器：`docker compose up -d --build` 后 `curl http://localhost:8100/healthz` 返回 `ok`（实测 HTTP 200）；镜像约 21MB，站点产物 216KB。
 

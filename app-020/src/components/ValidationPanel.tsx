@@ -13,6 +13,13 @@ const TYPE_LABELS: Record<string, string> = {
   NO_DOOR: '房间无门',
 };
 
+const KIND_LABELS: Record<string, string> = {
+  office: '办公楼',
+  retail: '商业',
+  factory: '厂房',
+  school: '学校',
+};
+
 type Props = {
   floorId: string;
   result: ValidationResult | null;
@@ -26,6 +33,12 @@ export function ValidationPanel({ floorId, result, busy, rules, onLocate }: Prop
 
   const locateCoverage = (pt: Pt) => onLocate(pt);
 
+  // 结果是否落后于当前规则（类别或版本对不上）：改完规则到重新校验落盘之间，
+  // 以及本次会话规则又被改过的历史结果，都要显式标出，避免拿旧版结论当现状
+  const snap = result?.rulesSnapshot;
+  const stale =
+    !!snap && (snap.buildingKind !== rules.buildingKind || snap.version !== rules.version);
+
   return (
     <section className="validation">
       <h4>
@@ -36,32 +49,38 @@ export function ValidationPanel({ floorId, result, busy, rules, onLocate }: Prop
         <>
           <div className={`verdict ${result.pass ? 'pass' : 'fail'}`}>
             {result.pass ? '✔ 当前规则下合规' : '✘ 存在不合规项'}
-            <span className="hint"> 规则：{result.rulesSnapshot.buildingKind} v{result.rulesSnapshot.version}</span>
+            <span className="hint"> 结果按：{KIND_LABELS[snap!.buildingKind] ?? snap!.buildingKind} v{snap!.version}</span>
           </div>
+          {stale && (
+            <p className="hint stale-warn">
+              ⚠ 规则已更新为「{KIND_LABELS[rules.buildingKind] ?? rules.buildingKind} v{rules.version}」，
+              {busy ? '正在按新版重新校验…' : '以下结果仍为旧版判定，请以重新校验后的结论为准'}
+            </p>
+          )}
           <div className="statgrid">
             <div className="stat">
               <label>疏散最远（沿路径）</label>
-              <b className={result.travelWorstM != null && result.travelWorstM > rules.maxTravelDistanceM ? 'bad' : ''}>
+              <b className={result.travelWorstM != null && result.travelWorstM > snap!.maxTravelDistanceM ? 'bad' : ''}>
                 {result.travelWorstM != null ? `${result.travelWorstM.toFixed(1)}m` : '—'}
               </b>
-              <span>限值 {rules.maxTravelDistanceM}m</span>
+              <span>限值 {snap!.maxTravelDistanceM}m</span>
               {result.travelWorstPoint && (
                 <button className="ghost" onClick={() => onLocate(result.travelWorstPoint!)}>定位</button>
               )}
             </div>
             <div className="stat">
               <label>袋形走道（死端）</label>
-              <b className={result.deadEndM != null && result.deadEndM > rules.deadEndDistanceM ? 'bad' : ''}>
+              <b className={result.deadEndM != null && result.deadEndM > snap!.deadEndDistanceM ? 'bad' : ''}>
                 {result.deadEndM != null ? `${result.deadEndM.toFixed(1)}m` : '—'}
               </b>
-              <span>限值 {rules.deadEndDistanceM}m</span>
+              <span>限值 {snap!.deadEndDistanceM}m</span>
             </div>
             <div className="stat">
               <label>灭火器未覆盖</label>
               <b className={result.coverage && !result.coverage.pass ? 'bad' : ''}>
                 {result.coverage ? `${result.coverage.uncoveredM2.toFixed(1)}㎡` : '—'}
               </b>
-              <span>半径 {rules.extinguisherRadiusM}m</span>
+              <span>半径 {snap!.extinguisherRadiusM}m</span>
               {result.coverage && result.coverage.samples.length > 0 && (
                 <button className="ghost" onClick={() => locateCoverage(result.coverage!.samples[0])}>看未覆盖点</button>
               )}
@@ -92,16 +111,19 @@ export function ValidationPanel({ floorId, result, busy, rules, onLocate }: Prop
                 <span className={`dot ${it.severity}`} />
                 <span>
                   <b>{TYPE_LABELS[it.type] ?? it.type}</b> {it.message}
+                  <span className="hint item-basis">依据：{it.basis}</span>
                 </span>
               </button>
             ))}
           </div>
-          <p className="hint">依据：{result.rulesSnapshot.source}（结果记录于 {new Date(result.checkedAt).toLocaleString('zh-CN')}）</p>
+          <p className="hint">
+            依据文号：{snap!.source}（结果记录于 {new Date(result.checkedAt).toLocaleString('zh-CN')}）
+          </p>
         </>
       )}
       {floor && (
         <p className="hint">
-          楼层版本 v{floor.version} · 校验按「{rules.buildingKind}」规则 v{rules.version} 执行
+          楼层版本 v{floor.version} · 当前规则：「{KIND_LABELS[rules.buildingKind] ?? rules.buildingKind}」v{rules.version}
         </p>
       )}
     </section>

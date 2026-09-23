@@ -76,6 +76,14 @@ export type Building = {
   createdAt: string;
 };
 
+/** 各类校验所照的具体条文（挂在规则集上，规则页可改文号时同步维护） */
+export type RuleClauses = {
+  travel: string; // 疏散距离限值依据
+  deadEnd: string; // 袋形走道限值依据
+  coverage: string; // 灭火器保护半径依据
+  exits: string; // 安全出口数量依据
+};
+
 export type RuleSet = {
   buildingKind: BuildingKind;
   maxTravelDistanceM: number;
@@ -84,6 +92,7 @@ export type RuleSet = {
   exitMinAreaM2: number; // 超过此面积需 ≥2 个安全出口
   exitMaxOccupants: number; // 超过此人数需 ≥2 个安全出口
   source: string; // 依据文号，报告中打印
+  clauses: RuleClauses; // 每一类校验项对应的具体条文
   version: number; // 规则版本，修改即 +1，校验结果记录当时版本
 };
 
@@ -93,6 +102,8 @@ export type ValidationItem = {
   severity: ValidationSeverity;
   type: string;
   message: string;
+  /** 本条判定所照的具体条文（含依据文号），随结果保存，事后翻记录可逐条溯源 */
+  basis: string;
   roomId?: string;
   facilityId?: string;
   point?: Pt; // 图纸定位点 mm
@@ -109,13 +120,17 @@ export type ValidationResult = {
   deadEndM: number | null;
   coverage: { uncoveredM2: number; totalM2: number; pass: boolean; samples: Pt[] } | null;
   exits: { present: number; required: number };
+  /** 当时生效规则的完整快照：改规则后重新校验按新版算，旧结果仍能看出按的是哪一版、哪条文 */
   rulesSnapshot: {
     buildingKind: BuildingKind;
     version: number;
     source: string;
+    clauses: RuleClauses;
     maxTravelDistanceM: number;
     deadEndDistanceM: number;
     extinguisherRadiusM: number;
+    exitMinAreaM2: number;
+    exitMaxOccupants: number;
   };
 };
 

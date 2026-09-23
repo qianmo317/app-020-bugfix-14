@@ -63,6 +63,8 @@ export function PrintPage({ floorId }: { floorId: string }) {
 
   const p = PAPER[paper];
   const result = floor.lastValidation;
+  // 报告抬头以「当时校验所用规则快照」的文号为准；未校验过才退回当前规则
+  const reportSource = result?.rulesSnapshot.source ?? rules.source;
   const barM = niceScaleBarM(80 / (scaleInfo || 0.05) / 1000);
 
   // 整改清单：不合规项 + 过期/缺失检查
@@ -181,7 +183,7 @@ export function PrintPage({ floorId }: { floorId: string }) {
       <div className="print-sheet" style={{ aspectRatio: `${p.w} / ${p.h}`, maxWidth: p.w * 3.2 }}>
         <div className="sheet-title">
           <b>{building?.name ?? '建筑'} {floorLabel(floor.level)}层 疏散指示图</b>
-          <span>比例尺 1 : {Math.round(1000 / (scaleInfo || 0.05))} ｜ 依据：{rules.source}</span>
+          <span>比例尺 1 : {Math.round(1000 / (scaleInfo || 0.05))} ｜ 依据：{reportSource}</span>
         </div>
         <div className="sheet-map">
           <svg
@@ -247,8 +249,8 @@ export function PrintPage({ floorId }: { floorId: string }) {
         <div className="sheet-foot">
           {result ? (
             <>
-              <span>校验结论：{result.pass ? '合规' : '存在不合规项'} · 疏散最远 {result.travelWorstM != null ? `${result.travelWorstM.toFixed(1)}m` : '—'}（限值 {result.rulesSnapshot.maxTravelDistanceM}m） · 规则 {result.rulesSnapshot.buildingKind} v{result.rulesSnapshot.version}</span>
-              <span>依据文号：{result.rulesSnapshot.source} ｜ 校验时间：{new Date(result.checkedAt).toLocaleString('zh-CN')}</span>
+              <span>校验结论：{result.pass ? '合规' : '存在不合规项'} · 疏散最远 {result.travelWorstM != null ? `${result.travelWorstM.toFixed(1)}m` : '—'}（限值 {result.rulesSnapshot.maxTravelDistanceM}m） · 袋形走道限值 {result.rulesSnapshot.deadEndDistanceM}m · 灭火器半径 {result.rulesSnapshot.extinguisherRadiusM}m · 规则 {result.rulesSnapshot.buildingKind} v{result.rulesSnapshot.version}</span>
+              <span>依据文号：{result.rulesSnapshot.source} ｜ 校验时间：{new Date(result.checkedAt).toLocaleString('zh-CN')}（各不合规项所照条文见整改清单）</span>
             </>
           ) : (
             <span>尚未校验（在编辑器中打开本层即自动校验）</span>
@@ -264,6 +266,7 @@ export function PrintPage({ floorId }: { floorId: string }) {
           {result?.items.map((it, i) => (
             <li key={i} className={it.severity}>
               [{it.severity === 'error' ? '超限' : '警告'}] {it.message}
+              <span className="hint"> 依据：{it.basis}</span>
             </li>
           ))}
           {overdueFacs.map((f) => {
