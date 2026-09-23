@@ -2,11 +2,14 @@ import type {
   Floor,
   Pt,
   Room,
+  RuleClauseKey,
   RuleSet,
+  ValidationBasis,
   ValidationItem,
   ValidationResult,
   FacilityKind,
 } from '../model';
+import { RULE_TYPE_CLAUSE_KEYS } from '../model';
 import {
   MM_PER_M,
   dist,
@@ -22,6 +25,20 @@ import { CHECK_INTERVAL_DAYS, OCCUPANCY_DENSITY_M2_PER_PERSON } from '../rules/d
 const TRAVEL_STEP_MM = 250; // 走道栅格 0.25m，保证与手工沿路径测量误差 < 0.5m
 const ROOM_STEP_MM = 500; // 房间内部采样 0.5m
 const COVERAGE_STEP_MM = 500; // 覆盖判定栅格 0.5m
+
+/**
+ * 构造校验项依据：把当时规则集的版本、文号、具体条文带到每一项上。
+ * clauseKey 缺省按校验类型映射；显式传入可覆盖（如出口数量项区分面积/人数条文）。
+ */
+function basisFor(rules: RuleSet, type: string, clauseKey?: RuleClauseKey): ValidationBasis {
+  const key = clauseKey ?? RULE_TYPE_CLAUSE_KEYS[type];
+  return {
+    buildingKind: rules.buildingKind,
+    rulesVersion: rules.version,
+    source: rules.source,
+    clause: key ? (rules.clauses[key] ?? null) : null,
+  };
+}
 
 export type CoverageResult = {
   uncoveredM2: number;
@@ -150,6 +167,41 @@ function estimateOccupants(room: Room): number {
 
 const days = (n: number) => n * 24 * 3600 * 1000;
 
+/**
+ * 已保存的校验结果是否落后于当前规则：类别或版本对不上即为过期，
+ * 界面应提示「规则已更新，需按新版重新校验」。
+ */
+export function isValidationStale(result: ValidationResult | null | undefined, rules: RuleSet): boolean {
+  if (!result) return false;
+  const snap = result.rulesSnapshot;
+  return snap.buildingKind !== rules.buildingKind || snap.version !== rules.version;
+}
+
+/**
+ * 兼容旧版本存入 localStorage 的校验结果：早期快照缺限值/clauses/updatedAt 字段，
+ * 直接读取会崩。缺失字段按该类别当前规则补齐（结构兜底，不改变判定结论）。
+ */
+export function normalizeValidationResult(result: unknown, currentRules: Record<string, RuleSet>): ValidationResult | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const r = result as ValidationResult;
+  const rawSnap = r.rulesSnapshot as Partial<ValidationResult['rulesSnapshot']> | undefined;
+  if (!rawSnap || typeof rawSnap.buildingKind !== 'string') return undefined;
+  const cur = currentRules[rawSnap.buildingKind] ?? Object.values(currentRules)[0];
+  r.rulesSnapshot = {
+    buildingKind: rawSnap.buildingKind as RuleSet['buildingKind'],
+    version: rawSnap.version ?? cur.version,
+    updatedAt: rawSnap.updatedAt ?? r.checkedAt ?? cur.updatedAt,
+    source: rawSnap.source ?? cur.source,
+    maxTravelDistanceM: rawSnap.maxTravelDistanceM || cur.maxTravelDistanceM,
+    deadEndDistanceM: rawSnap.deadEndDistanceM || cur.deadEndDistanceM,
+    extinguisherRadiusM: rawSnap.extinguisherRadiusM || cur.extinguisherRadiusM,
+    exitMinAreaM2: rawSnap.exitMinAreaM2 ?? cur.exitMinAreaM2,
+    exitMaxOccupants: rawSnap.exitMaxOccupants ?? cur.exitMaxOccupants,
+    clauses: rawSnap.clauses ?? structuredClone(cur.clauses),
+  };
+  return r;
+}
+
 /** 设施检查记录是否过期（无记录 / 最近一次检查超过周期 / 状态为损坏或缺失） */
 export function checkDueInfo(facility: { kind: FacilityKind; checks: { date: string; status: string }[] }, now: number): { overdue: boolean; defect: boolean; missing: boolean; dueDate: string | null } {
   const interval = CHECK_INTERVAL_DAYS[facility.kind] ?? 90;
@@ -211,6 +263,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
           type: 'EXIT_NOT_CONNECTED',
           facilityId: f.id,
           point: { x: f.x, y: f.y },
+          basis: basisFor(rules, 'EXIT_NOT_CONNECTED'),
           message: `安全出口 ${f.code} 未连接到${openPlan ? '房间区域' : '走道'}（周边 2.5m 内无可行走行区域）`,
         });
       }
@@ -237,6 +290,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
           type: 'DEADEND_EXCEED',
           value: deadEndM,
           limit: rules.deadEndDistanceM,
+          basis: basisFor(rules, 'DEADEND_EXCEED'),
           message: `袋形走道（死端）最大长度 ${deadEndM.toFixed(1)}m 超过限值 ${rules.deadEndDistanceM}m`,
         });
       }
@@ -270,6 +324,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
           point: res.point,
           value: res.worstM,
           limit: rules.maxTravelDistanceM,
+          basis: basisFor(rules, 'TRAVEL_EXCEED'),
           message: `房间「${r.name}」疏散距离 ${res.worstM.toFixed(1)}m 超过限值 ${rules.maxTravelDistanceM}m（沿路径计算）`,
         });
       }
@@ -296,13 +351,19 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
             point: wp,
             value: worst / MM_PER_M,
             limit: rules.maxTravelDistanceM,
+            basis: basisFor(rules, 'TRAVEL_EXCEED'),
             message: `走道「${r.name}」最远点疏散距离 ${(worst / MM_PER_M).toFixed(1)}m 超过限值 ${rules.maxTravelDistanceM}m`,
           });
         }
       }
     }
   } else if (walkPolys.length && !exitPts.length) {
-    items.push({ severity: 'error', type: 'EXIT_COUNT', message: '未布置任何安全出口' });
+    items.push({
+      severity: 'error',
+      type: 'EXIT_COUNT',
+      basis: basisFor(rules, 'EXIT_COUNT', 'exitArea'),
+      message: '未布置任何安全出口',
+    });
   }
 
   // 灭火器覆盖
@@ -316,6 +377,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
       type: 'COVERAGE_UNCOVERED',
       value: coverage.uncoveredM2,
       point: coverage.samples[0],
+      basis: basisFor(rules, 'COVERAGE_UNCOVERED'),
       message: `灭火器保护半径（${rules.extinguisherRadiusM}m）未覆盖面积 ${coverage.uncoveredM2.toFixed(1)}㎡，超过阈值 max(2㎡, 5%)`,
     });
   }
@@ -325,11 +387,14 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
   const occupants = floor.rooms.reduce((s, r) => s + estimateOccupants(r), 0);
   const required = areaM2 > rules.exitMinAreaM2 || occupants > rules.exitMaxOccupants ? 2 : 1;
   if (exitPts.length && exits.length < required) {
+    // 人数与面积同时触发时优先标注人数条文（实际疏散设计以人数控制为主）
+    const clauseKey: RuleClauseKey = occupants > rules.exitMaxOccupants ? 'exitOccupants' : 'exitArea';
     items.push({
       severity: 'error',
       type: 'EXIT_COUNT',
       value: exits.length,
       limit: required,
+      basis: basisFor(rules, 'EXIT_COUNT', clauseKey),
       message: `安全出口 ${exits.length} 个，少于要求数量（面积 ${areaM2.toFixed(0)}㎡ / 人数约 ${occupants} → 需 ≥ ${required} 个）`,
     });
   }
@@ -343,6 +408,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
         type: 'FACILITY_DEFECT',
         facilityId: f.id,
         point: { x: f.x, y: f.y },
+        basis: basisFor(rules, 'FACILITY_DEFECT'),
         message: `${f.code} 最近检查状态为「${f.checks.find((c) => c.date === [...f.checks].sort((a, b) => b.date.localeCompare(a.date))[0].date)?.status ?? 'missing'}」，需整改`,
       });
     } else if (info.missing) {
@@ -351,6 +417,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
         type: 'CHECK_MISSING',
         facilityId: f.id,
         point: { x: f.x, y: f.y },
+        basis: basisFor(rules, 'CHECK_MISSING'),
         message: `${f.code} 未登记任何检查记录`,
       });
     } else if (info.overdue) {
@@ -359,6 +426,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
         type: 'CHECK_OVERDUE',
         facilityId: f.id,
         point: { x: f.x, y: f.y },
+        basis: basisFor(rules, 'CHECK_OVERDUE'),
         message: `${f.code} 检查已过期（应检日期 ${info.dueDate}）`,
       });
     }
@@ -389,10 +457,14 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
     rulesSnapshot: {
       buildingKind: rules.buildingKind,
       version: rules.version,
+      updatedAt: rules.updatedAt,
       source: rules.source,
-      maxTravelDistanceM: 0,
-      deadEndDistanceM: 0,
-      extinguisherRadiusM: 0,
+      maxTravelDistanceM: rules.maxTravelDistanceM,
+      deadEndDistanceM: rules.deadEndDistanceM,
+      extinguisherRadiusM: rules.extinguisherRadiusM,
+      exitMinAreaM2: rules.exitMinAreaM2,
+      exitMaxOccupants: rules.exitMaxOccupants,
+      clauses: structuredClone(rules.clauses),
     },
   };
 }

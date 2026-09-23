@@ -12,7 +12,8 @@ import type {
   RuleSet,
   ValidationResult,
 } from '../model';
-import { DEFAULT_RULES } from '../rules/defaults';
+import { DEFAULT_RULES, normalizeRules } from '../rules/defaults';
+import { normalizeValidationResult } from '../lib/engine';
 import { nextCode, uid } from './id';
 import { polyAreaM2 } from '../lib/geometry';
 
@@ -33,10 +34,22 @@ function loadState(): AppState {
       const s = JSON.parse(raw) as Partial<AppState>;
       // 缺失的节用默认值补齐（如旧版本数据没有 rules/marks），而不是整体丢弃用户数据
       if (s && Array.isArray(s.buildings) && s.floors) {
+        // 规则按建筑类别独立存放；老数据缺 clauses/updatedAt 等字段时逐类别补全
+        const rules = {} as AppState['rules'];
+        (Object.keys(DEFAULT_RULES) as BuildingKind[]).forEach((kind) => {
+          rules[kind] = normalizeRules(kind, s.rules?.[kind] as Partial<typeof rules[typeof kind]> | undefined);
+        });
+        // 老版本校验结果缺新版快照字段，按当前规则补结构，避免界面读取崩溃
+        for (const fid of Object.keys(s.floors)) {
+          const f = s.floors[fid];
+          if (f?.lastValidation) {
+            f.lastValidation = normalizeValidationResult(f.lastValidation, rules) ?? f.lastValidation;
+          }
+        }
         return {
           buildings: s.buildings,
           floors: s.floors,
-          rules: { ...structuredClone(DEFAULT_RULES), ...(s.rules ?? {}) },
+          rules,
           marks: s.marks ?? {},
         };
       }
@@ -285,10 +298,45 @@ export function setLastValidation(floorId: string, result: ValidationResult) {
 
 // ---------- 规则 ----------
 
-export function updateRules(kind: BuildingKind, patch: Partial<Omit<RuleSet, 'buildingKind' | 'version'>>) {
+const RULE_SCALAR_KEYS = [
+  'maxTravelDistanceM',
+  'deadEndDistanceM',
+  'extinguisherRadiusM',
+  'exitMinAreaM2',
+  'exitMaxOccupants',
+  'source',
+] as const;
+
+export type RuleScalarPatch = Partial<Pick<RuleSet, (typeof RULE_SCALAR_KEYS)[number]>>;
+
+/**
+ * 修改某一类建筑的规则集：
+ * - 各类别独立，改 office 不会影响 retail/factory/school；
+ * - 仅当数值/文号确实变化时版本号才 +1 并记录 updatedAt（避免无效刷版本）。
+ */
+export function updateRules(kind: BuildingKind, patch: RuleScalarPatch) {
   setState((s) => {
     const r = s.rules[kind];
-    s.rules[kind] = { ...r, ...patch, version: r.version + 1 };
+    let changed = false;
+    for (const key of RULE_SCALAR_KEYS) {
+      if (key in patch && patch[key] !== undefined && patch[key] !== r[key]) changed = true;
+    }
+    if (!changed) return;
+    s.rules[kind] = { ...r, ...patch, version: r.version + 1, updatedAt: new Date().toISOString() };
+  });
+}
+
+/** 修改某条限值对应的具体条文（同样只在内容变化时升版） */
+export function updateRuleClause(kind: BuildingKind, clauseKey: keyof RuleSet['clauses'], text: string) {
+  setState((s) => {
+    const r = s.rules[kind];
+    if (r.clauses[clauseKey] === text) return;
+    s.rules[kind] = {
+      ...r,
+      clauses: { ...r.clauses, [clauseKey]: text },
+      version: r.version + 1,
+      updatedAt: new Date().toISOString(),
+    };
   });
 }
 

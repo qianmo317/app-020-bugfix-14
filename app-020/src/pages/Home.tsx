@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { addBuilding, deleteBuilding, loadDemo, useStore } from '../store/store';
+import { isValidationStale } from '../lib/engine';
 import { Link } from '../router';
 import type { BuildingKind } from '../model';
 
@@ -13,6 +14,7 @@ const KIND_LABELS: Record<BuildingKind, string> = {
 export function Home() {
   const buildings = useStore((s) => s.buildings);
   const floors = useStore((s) => s.floors);
+  const rulesMap = useStore((s) => s.rules);
   const [name, setName] = useState('');
   const [kind, setKind] = useState<BuildingKind>('office');
 
@@ -48,6 +50,7 @@ export function Home() {
             (s, f) => s + (f.lastValidation?.items.filter((i) => i.type === 'CHECK_OVERDUE' || i.type === 'CHECK_MISSING').length ?? 0),
             0,
           );
+          const stale = bfs.reduce((s, f) => s + (isValidationStale(f.lastValidation, rulesMap[b.kind]) ? 1 : 0), 0);
           return (
             <div className="card" key={b.id}>
               <div className="cardhead">
@@ -58,6 +61,7 @@ export function Home() {
                 {bfs.length} 个楼层 ·
                 <span className={errors > 0 ? 'bad' : 'good'}> 超限项 {errors}</span> ·
                 <span className={overdue > 0 ? 'warn' : ''}> 过期/缺检 {overdue}</span>
+                {stale > 0 && <span className="warn"> · 待按新规重校 {stale} 层</span>}
               </div>
               <div className="cardactions">
                 <Link className="btn" to={`/building/${b.id}`}>打开</Link>

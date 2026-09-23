@@ -24,8 +24,9 @@ type Props = { floorId: string };
 export function FloorEditor({ floorId }: Props) {
   const floor = useStore((s) => s.floors[floorId]);
   const building = useStore((s) => s.buildings.find((b) => b.id === floor?.buildingId));
-  const rules = useStore((s) => (floor ? s.rules['office'] : undefined));
-  const rulesVersion = rules?.version ?? 0;
+  // 校验规则跟随楼栋类别：同一栋楼内不同楼层共用该类别规则，不同类别互不影响
+  const rules = useStore((s) => (building ? s.rules[building.kind] : undefined));
+  const rulesKey = rules ? `${rules.buildingKind}:${rules.version}` : '';
 
   const [tool, setTool] = useState<Tool>('select');
   const [roomUsage, setRoomUsage] = useState<RoomUsage>('office');
@@ -81,7 +82,7 @@ export function FloorEditor({ floorId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [floorId, floor?.rooms.length === 0]);
 
-  // 自动校验（防抖）
+  // 自动校验（防抖）。依赖含规则「类别:版本」：规则改动升版或楼栋切换类别后按新版重算
   useEffect(() => {
     if (!floor || !rules) return;
     setBusy(true);
@@ -95,7 +96,7 @@ export function FloorEditor({ floorId }: Props) {
     }, 500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [floorId, floor?.version, rulesVersion]);
+  }, [floorId, floor?.version, rulesKey]);
 
   if (!floor || !rules) {
     return <div className="page">楼层不存在。<Link to="/">返回首页</Link></div>;
@@ -235,6 +236,14 @@ export function FloorEditor({ floorId }: Props) {
     const exts = floor.facilities.filter((f) => f.kind === 'extinguisher').map((f) => ({ x: f.x, y: f.y }));
     const res = computeCoverage(floor.rooms, exts, rules.extinguisherRadiusM, true);
     setCoverageCells(res.cells);
+  };
+
+  /** 按当前规则立即重新校验（规则更新后，旧结果仍保留在历史记录里时使用） */
+  const revalidateNow = () => {
+    setBusy(true);
+    const result = validateFloor(floor, rules);
+    setLastValidation(floorId, result);
+    setBusy(false);
   };
 
   const importUnderlay = async (file: File) => {
@@ -395,6 +404,7 @@ export function FloorEditor({ floorId }: Props) {
           busy={busy}
           rules={rules}
           onLocate={locate}
+          onRevalidate={revalidateNow}
         />
         {selRoom && (
           <section>

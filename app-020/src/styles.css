@@ -172,3 +172,14 @@ input, select {
   .print-sheet { border: none; margin: 0; width: 100% !important; max-width: none !important; page-break-after: always; }
   @page { size: A4 landscape; margin: 8mm; }
 }
+
+/* 规则版本/依据留痕 */
+.stalebar {
+  background: #fdeeea; color: #8a4b12; border: 1px solid #e6b58f;
+  border-radius: 8px; padding: 6px 10px; font-size: 12px; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.stalebar button { margin-left: auto; }
+.item .basis { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; font-weight: 400; }
+.clause-row { align-items: flex-start; }
+.clause-row textarea { font-size: 12px; resize: vertical; }

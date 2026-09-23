@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { BuildingKind } from '../model';
 import { addFloor, deleteFloor, updateBuilding, useStore } from '../store/store';
+import { isValidationStale } from '../lib/engine';
 import { floorLabel } from '../store/id';
 import { Link } from '../router';
 
@@ -14,6 +15,7 @@ const KIND_LABELS: Record<BuildingKind, string> = {
 export function BuildingPage({ buildingId }: { buildingId: string }) {
   const building = useStore((s) => s.buildings.find((b) => b.id === buildingId));
   const floors = useStore((s) => s.floors);
+  const rules = useStore((s) => (building ? s.rules[building.kind] : undefined));
   const [level, setLevel] = useState(1);
 
   if (!building) return <div className="page">建筑不存在。<Link to="/">返回首页</Link></div>;
@@ -72,6 +74,7 @@ export function BuildingPage({ buildingId }: { buildingId: string }) {
         <tbody>
           {bfs.map((f) => {
             const v = f.lastValidation;
+            const stale = rules ? isValidationStale(v, rules) : false;
             return (
               <tr key={f.id}>
                 <td>
@@ -82,9 +85,16 @@ export function BuildingPage({ buildingId }: { buildingId: string }) {
                 <td>{v?.travelWorstM != null ? `${v.travelWorstM.toFixed(1)}m` : '—'}</td>
                 <td>
                   {v ? (
-                    <span className={`badge ${v.pass ? 'st-ok' : 'st-damaged'}`}>
-                      {v.pass ? '合规' : `${v.items.filter((i) => i.severity === 'error').length} 项超限`}
-                    </span>
+                    <>
+                      <span className={`badge ${v.pass ? 'st-ok' : 'st-damaged'}`}>
+                        {v.pass ? '合规' : `${v.items.filter((i) => i.severity === 'error').length} 项超限`}
+                      </span>
+                      {stale && (
+                        <span className="badge st-expired" title={`结果按 ${v.rulesSnapshot.buildingKind} v${v.rulesSnapshot.version} 校验，当前为 ${rules!.buildingKind} v${rules!.version}`}>
+                          规则已更新·待重校
+                        </span>
+                      )}
+                    </>
                   ) : (
                     <span className="hint">未校验</span>
                   )}

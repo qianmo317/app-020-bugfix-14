@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Pt } from '../model';
 import { FACILITY_LABELS, USAGE_LABELS } from '../model';
 import { bboxOf, niceScaleBarM } from '../lib/geometry';
-import { checkDueInfo } from '../lib/engine';
+import { checkDueInfo, isValidationStale } from '../lib/engine';
 import { useStore, setMark } from '../store/store';
 import { floorLabel } from '../store/id';
 import { Link } from '../router';
@@ -63,6 +63,7 @@ export function PrintPage({ floorId }: { floorId: string }) {
 
   const p = PAPER[paper];
   const result = floor.lastValidation;
+  const stale = isValidationStale(result, rules);
   const barM = niceScaleBarM(80 / (scaleInfo || 0.05) / 1000);
 
   // 整改清单：不合规项 + 过期/缺失检查
@@ -181,7 +182,7 @@ export function PrintPage({ floorId }: { floorId: string }) {
       <div className="print-sheet" style={{ aspectRatio: `${p.w} / ${p.h}`, maxWidth: p.w * 3.2 }}>
         <div className="sheet-title">
           <b>{building?.name ?? '建筑'} {floorLabel(floor.level)}层 疏散指示图</b>
-          <span>比例尺 1 : {Math.round(1000 / (scaleInfo || 0.05))} ｜ 依据：{rules.source}</span>
+          <span>比例尺 1 : {Math.round(1000 / (scaleInfo || 0.05))} ｜ 依据：{result?.rulesSnapshot.source ?? rules.source}</span>
         </div>
         <div className="sheet-map">
           <svg
@@ -247,7 +248,10 @@ export function PrintPage({ floorId }: { floorId: string }) {
         <div className="sheet-foot">
           {result ? (
             <>
-              <span>校验结论：{result.pass ? '合规' : '存在不合规项'} · 疏散最远 {result.travelWorstM != null ? `${result.travelWorstM.toFixed(1)}m` : '—'}（限值 {result.rulesSnapshot.maxTravelDistanceM}m） · 规则 {result.rulesSnapshot.buildingKind} v{result.rulesSnapshot.version}</span>
+              <span>
+                校验结论：{result.pass ? '合规' : '存在不合规项'} · 疏散最远 {result.travelWorstM != null ? `${result.travelWorstM.toFixed(1)}m` : '—'}（限值 {result.rulesSnapshot.maxTravelDistanceM}m） · 规则 {result.rulesSnapshot.buildingKind} v{result.rulesSnapshot.version}
+                {stale && ' · ⚠规则已更新，本结论需重新校验'}
+              </span>
               <span>依据文号：{result.rulesSnapshot.source} ｜ 校验时间：{new Date(result.checkedAt).toLocaleString('zh-CN')}</span>
             </>
           ) : (
@@ -264,6 +268,9 @@ export function PrintPage({ floorId }: { floorId: string }) {
           {result?.items.map((it, i) => (
             <li key={i} className={it.severity}>
               [{it.severity === 'error' ? '超限' : '警告'}] {it.message}
+              {it.basis && (
+                <div className="hint">判定依据：{it.basis.clause ?? it.basis.source}（{it.basis.buildingKind} 规则 v{it.basis.rulesVersion}）</div>
+              )}
             </li>
           ))}
           {overdueFacs.map((f) => {

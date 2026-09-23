@@ -22,6 +22,7 @@ import {
   addCheck,
   deleteCheck,
   updateRules,
+  updateRuleClause,
   resetRules,
   setMark,
   setLastValidation,
@@ -78,6 +79,39 @@ describe('store 响应性（useSyncExternalStore 依赖的引用语义）', () =
     resetRules('office');
     expect(snap().rules.office.extinguisherRadiusM).toBe(r0.extinguisherRadiusM);
     expect(snap().rules.office.version).toBe(1);
+  });
+
+  it('S3a 各类别规则互相隔离（旧 bug：规则页所有输入写死 office，改一类带变另一类）', () => {
+    const officeBefore = { ...snap().rules.office };
+    const retailBefore = { ...snap().rules.retail };
+    const factoryBefore = { ...snap().rules.factory };
+    updateRules('retail', { maxTravelDistanceM: 12 });
+    const after = snap().rules;
+    expect(after.retail.maxTravelDistanceM).toBe(12);
+    expect(after.retail.version).toBe(retailBefore.version + 1);
+    // 其余类别限值与版本均不得被动
+    expect(after.office.maxTravelDistanceM).toBe(officeBefore.maxTravelDistanceM);
+    expect(after.office.version).toBe(officeBefore.version);
+    expect(after.factory.maxTravelDistanceM).toBe(factoryBefore.maxTravelDistanceM);
+    expect(after.factory.version).toBe(factoryBefore.version);
+  });
+
+  it('S3b 数值未实际变化时不刷版本号，变化时记录 updatedAt', () => {
+    const r0 = snap().rules.factory;
+    updateRules('factory', { maxTravelDistanceM: r0.maxTravelDistanceM });
+    expect(snap().rules.factory.version).toBe(r0.version);
+    updateRules('factory', { maxTravelDistanceM: r0.maxTravelDistanceM + 1 });
+    const r1 = snap().rules.factory;
+    expect(r1.version).toBe(r0.version + 1);
+    expect(new Date(r1.updatedAt).getTime()).toBeGreaterThan(new Date(r0.updatedAt).getTime() - 1);
+  });
+
+  it('S3c updateRuleClause 修改条文并升版，且只影响该类别', () => {
+    const officeV = snap().rules.office.version;
+    updateRuleClause('school', 'travel', '自定义学校条文');
+    expect(snap().rules.school.clauses.travel).toBe('自定义学校条文');
+    expect(snap().rules.school.version).toBeGreaterThanOrEqual(1);
+    expect(snap().rules.office.version).toBe(officeV);
   });
 });
 
